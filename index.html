@@ -69,6 +69,8 @@
     padding: 6px 8px 6px 10px;
   }
   .lbl { font-size: 11px; font-weight: 800; letter-spacing: 0.12em; opacity: 0.7; margin-right: 2px; }
+  body { -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
+  button { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
   button {
     font: 800 14px/1 var(--font);
     color: #fff;
@@ -184,16 +186,33 @@
   <button id="whistle">ポッポー！</button>
 </nav>
 
-<script type="importmap">
-{ "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-} }
+<script>
+  // If the scene fails to start (old browser, no WebGL 2, script error), say so on screen instead of hanging on the loading text.
+  (function () {
+    var shown = false;
+    function fail(msg) {
+      var el = document.getElementById('loading');
+      if (!el || shown) return; shown = true;
+      el.style.pointerEvents = 'auto';
+      el.innerHTML = '<div style="max-width:420px;margin:0 16px;background:#fff8ea;border:3px solid #3a2a20;border-radius:14px;box-shadow:0 5px 0 #3a2a20;padding:14px 16px;font-size:15px;line-height:1.6">'
+        + '<b>積み木をならべられませんでした</b><br>' + msg
+        + '<br><small style="opacity:.7">ブラウザ: ' + navigator.userAgent.replace(/[<>&]/g, '') + '</small></div>';
+    }
+    window.__sceneFail = fail;
+    try {
+      var gl = document.createElement('canvas').getContext('webgl2');
+      if (!gl) fail('このブラウザは WebGL 2 に対応していないようです。iPad の場合は iPadOS 15 以降の Safari で開いてください。');
+    } catch (e) {}
+    window.addEventListener('error', function (e) { if (document.getElementById('loading')) fail('エラー: ' + (e.message || 'スクリプトを読み込めませんでした')); }, true);
+    window.addEventListener('unhandledrejection', function (e) { if (document.getElementById('loading')) fail('エラー: ' + ((e.reason && e.reason.message) || e.reason)); });
+    setTimeout(function () { if (document.getElementById('loading')) fail('読み込みに時間がかかっています。通信状況を確認して、ページを再読み込みしてください。'); }, 20000);
+  })();
 </script>
 <script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+// jsDelivr's +esm builds resolve three's bare imports themselves, so no import map is needed (import maps need Safari 16.4+).
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/+esm';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/controls/OrbitControls.js/+esm';
+import { RoundedBoxGeometry } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/geometries/RoundedBoxGeometry.js/+esm';
 
 const V3 = THREE.Vector3;
 const TAU = Math.PI * 2;
@@ -210,9 +229,16 @@ try { await Promise.race([document.fonts.load('800 64px "M PLUS Rounded 1c"'), n
 
 // ---------- renderer / scene ----------
 const canvas = document.getElementById('c');
-const isSmall = Math.min(innerWidth, innerHeight) < 700 || matchMedia('(pointer: coarse)').matches;
+// iPad Safari reports itself as a Mac, so detect touch by capability rather than by pointer type or user agent
+const isTouch = navigator.maxTouchPoints > 0 || matchMedia('(any-pointer: coarse)').matches;
+const isSmall = Math.min(innerWidth, innerHeight) < 700 || isTouch;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, isSmall ? 1.5 : 2));
+canvas.addEventListener('webglcontextlost', e => {
+  e.preventDefault();
+  const d = document.createElement('div'); d.className = 'loading'; d.id = 'loading'; document.body.appendChild(d);
+  window.__sceneFail?.('描画用のメモリが足りなくなりました。ほかのタブやアプリを閉じてから、ページを再読み込みしてください。');
+});
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1203,7 +1229,6 @@ function flyTo(I) {
   fly = { t: 0, dur: 1.6, fromT: controls.target.clone(), toT, fromP: camera.position.clone(), toP: toT.clone().addScaledVector(dir, 72) };
 }
 const btn = id => document.getElementById(id);
-const isTouch = matchMedia('(pointer: coarse)').matches;
 function setMode(m) {
   mode = m;
   for (const k of ['orbit', 'follow', 'fly']) btn('v-' + k).setAttribute('aria-pressed', m === k);
@@ -1245,20 +1270,20 @@ const joy = { x: 0, y: 0, id: null };
     joy.x = dx / max; joy.y = -dy / max; knob.style.transform = `translate(${dx}px, ${dy}px)`;
   };
   const end = e => { if (e.pointerId !== joy.id) return; joy.id = null; joy.x = joy.y = 0; knob.style.transform = ''; };
-  base.addEventListener('pointerdown', e => { joy.id = e.pointerId; base.setPointerCapture(e.pointerId); move(e); });
+  base.addEventListener('pointerdown', e => { joy.id = e.pointerId; try { base.setPointerCapture(e.pointerId); } catch (_) {} move(e); });
   base.addEventListener('pointermove', e => { if (e.pointerId === joy.id) move(e); });
   base.addEventListener('pointerup', end); base.addEventListener('pointercancel', end);
 }
 const lift = { up: false, down: false };
 for (const [id, k] of [['up', 'up'], ['down', 'down']]) {
   const b = btn(id);
-  b.addEventListener('pointerdown', e => { b.setPointerCapture(e.pointerId); lift[k] = true; });
+  b.addEventListener('pointerdown', e => { try { b.setPointerCapture(e.pointerId); } catch (_) {} lift[k] = true; });
   for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(ev, () => { lift[k] = false; });
   b.addEventListener('contextmenu', e => e.preventDefault());
 }
 { // drag to look around, wheel to zoom (only while flying)
   let drag = null;
-  canvas.addEventListener('pointerdown', e => { if (mode !== 'fly') return; drag = { id: e.pointerId, x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener('pointerdown', e => { if (mode !== 'fly') return; drag = { id: e.pointerId, x: e.clientX, y: e.clientY }; try { canvas.setPointerCapture(e.pointerId); } catch (_) {} });
   canvas.addEventListener('pointermove', e => {
     if (!drag || e.pointerId !== drag.id) return;
     hero.camYawOff -= (e.clientX - drag.x) * 0.006; hero.camPitch = Math.min(1.25, Math.max(-0.45, hero.camPitch + (e.clientY - drag.y) * 0.005));
